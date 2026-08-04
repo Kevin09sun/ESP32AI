@@ -60,7 +60,26 @@ Fix: measured scale factor k = 22.2 / 27.70 = 0.801 applied to all current readi
 
 ## 2. Bigram model (embedding/lookup floor)
 
-<!-- Phase 1 results land here the day they exist. -->
+The first model on the chip is the neural bigram from makemore video 1: a single 27×27 weight matrix trained to a loss of 2.4901 after 100 forward + backward passes, exported to a C header. Because the input is a one-hot vector, the "matmul" collapses to selecting one row of W — so this model measures the energy floor of lookup-based inference: one row read, a 27-wide softmax, and a sample per character.
+ 
+| | |
+|---|---|
+| CPU clock | 240 MHz |
+| Generation speed | 26,744 chars/sec |
+| Mean power during generation | 283.78 ± 8.99 mW (std) |
+| Idle baseline (same day, same wiring) | 280.55 ± 4.90 mW (std) |
+| **Marginal energy** | **≈ 121 nJ/char** (± ~38 nJ statistical) |
+| Total energy (baseline included) | ≈ 10.6 µJ/char |
+ 
+The delta above idle is 3.23 mW — about 3.2σ against the combined standard error, so real but barely. The pre-registered expectation held: lookup inference is nearly free.
+ 
+The sharper finding is the ratio between the two energy numbers. The *model* costs ~121 nJ/char; *keeping the chip awake* to run it costs ~10.6 µJ/char — roughly 100× more. At this floor, inference cost is dominated by the price of the processor existing, not the price of the computation. The question for the rest of the project is where that flips: as models grow, marginal cost should climb toward and past the awake-cost.
+ 
+Caveats:
+- The idle baseline calls `delay()`, which lets the RTOS idle between ticks; the inference loop never yields. The 3.23 mW delta therefore bundles "continuous compute" with "the model" — at this scale they are not separable.
+- Generation uses a fixed-seed xorshift PRNG, so every run produces the identical character sequence; run-to-run power differences are rig noise, not workload variation.
+- INA219 reads pause generation ~0.6 ms each at 10 Hz — a ~0.6% duty perturbation.
+- Baseline stability check: 240 MHz idle re-measured on the day of this run gave 280.55 mW vs the original 280.81 mW (0.1% apart).
 
 ## 3. Matmul microbenchmark
 
