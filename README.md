@@ -83,7 +83,28 @@ Caveats:
 
 ## 3. Matmul microbenchmark
 
-<!-- Phase 2: J per million MACs, int8 vs float32. -->
+Naive triple-loop matmul kernels, int8 (int32 accumulator) and float32, at N = 16/32/64, 240 MHz. Runtime matrix size (flat arrays, stride indexing), fixed-seed fill, volatile checksum sink to defeat dead-code elimination. Same measurement scaffold as Phase 1.
+ 
+![Phase 2 matmul chart](phase2_matmul.png)
+ 
+| Kernel | N | MMACs/sec | Total µJ/MMAC | Marginal µJ/MMAC |
+|---|---|---|---|---|
+| int8 | 16 | 11.30 | 25.3 | 0.44 ± 0.18 |
+| int8 | 32 | 11.84 | 24.1 | 0.43 ± 0.16 |
+| int8 | 64 | 12.11 | 23.6 | 0.47 ± 0.16 |
+| f32 | 16 | 17.15 | 16.8 | 0.44 ± 0.14 |
+| f32 | 32 | 18.35 | 15.6 | 0.32 ± 0.11 |
+| f32 | 64 | 18.96 | 15.1 | 0.26 ± 0.10 |
+ 
+Findings:
+ 
+- **float32 beats int8 by ~1.6× in throughput — and therefore in energy per MAC.** The LX6 has a single-precision FPU (with fused multiply-add) but no SIMD; int8 data buys no parallelism, and each byte costs an extra sign-extension on load. On this chip, quantization to int8 buys *memory footprint only* and costs ~1.6× in speed and energy. This inverts the usual embedded-quantization narrative, which assumes vector units.
+- **Power is workload-independent:** all six configs sit at 285.5–288.1 mW, overlapping within noise, and match the Phase 1 bigram run. What the CPU computes barely moves power; that it is computing is everything. Consequently total energy per task ≈ power × time, and the fastest configuration is presumptively the most efficient (to be tested directly in the clock sweep).
+- **Throughput rises mildly with N** for both kernels (per-matmul overhead — loop setup and the N² checksum pass — amortizing away). No memory-wall downturn through N = 64.
+- **Compiler effects are measurable:** the same f32/N=64 kernel ran 22.89 MMACs/s with compile-time-constant N vs 18.96 with runtime N (−17%); int8 moved only 12.89 → 12.11. Benchmark numbers are properties of the *build*, not just the algorithm. Sweep numbers (one consistent binary) are primary.
+Caveats:
+- Marginal deltas are 5–7.5 mW against a ±1 mW-scale SE and were measured against a morning baseline on a sagging battery supply (see incident log) — marginal µJ/MMAC values are indicative; total-power values are robust.
+- Checksum pass adds ~1/N overhead (6% at N=16, 1.5% at N=64), included in the measurement.
 
 ## 4. MLP (makemore)
 
