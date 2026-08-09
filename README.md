@@ -227,7 +227,61 @@ The awake-cost still dominates marginal compute even at this size.
 
 ## 5. Sweeps
 
-<!-- Phase 4: quantization / clock / model size. One chart + one sentence each. -->
+### 5a. Quantization / storage sweep
+
+Completed in section 4: the same MLP across {float32, int8} × {flash, RAM}.
+One-sentence insight: **memory tier dominates number format — float32-in-RAM
+is the best configuration, and int8's apparent 2× win was a cache effect.**
+
+### 5b. Clock sweep
+
+The race-to-idle question: does lowering the clock save energy per character,
+or just stretch the fixed costs over more time? Protocol: idle/load pairs at
+each frequency, measured back-to-back in one session (the supply drift makes
+cross-session marginal deltas untrustworthy — see incident log), f32-RAM
+configuration, identical generated character sequence at each clock
+(reseeded RNG).
+
+Pre-registered predictions: total J/char → 240 MHz wins; marginal J/char →
+80 MHz wins; speed scales proportionally with clock. All three held.
+
+![Phase 4 clock sweep](phase4_clock_sweep.png)
+
+| Clock | chars/sec | P idle | P load | Marginal J/char | Total J/char |
+|---|---|---|---|---|---|
+| 240 MHz | 1,517 | 272.53 mW | 281.80 mW | 6.1 µJ | **186 µJ** |
+| 160 MHz | 1,007 | 241.92 mW | 244.80 mW | 2.9 µJ | 243 µJ |
+| 80 MHz | 498 | 208.83 mW | 208.32 mW | ~0 (below noise) | 418 µJ |
+
+Findings:
+
+- **Speed scales almost perfectly with clock** (measured 1007/498 vs 1011/506
+  predicted for proportional) — the workload is purely CPU-bound; RAM-resident
+  weights insulated it from memory-timing effects.
+- **The fork: "which clock is best" has no answer until you specify the
+  accounting.** If the chip exists to generate text, run it at 240 MHz —
+  race-to-idle wins, because the ~180 mW fixed floor gets charged over 3× the
+  time at 80 MHz (186 vs 418 µJ/char). If generation piggybacks on a chip that
+  must be awake anyway, run at 80 MHz, where inference is *marginally free* —
+  load power was statistically indistinguishable from idle (−0.5 ± ~0.5 mW).
+- **Open observation:** marginal power falls super-linearly with clock
+  (9.3 → 2.9 → ~0 mW; proportional would give 9.3 → 6.2 → 3.1). Mechanism not
+  isolated; candidates include nonlinear compute-vs-idle power gaps at low
+  clock and measurement-floor effects. Claims built on the marginal column
+  carry this caveat.
+
+Same-session idle baselines came out ~7 mW below Phase 0's (coherently across
+all three clocks) — consistent with the additive supply drift; per-frequency
+pairing absorbs it.
+
+### 5c. Model size sweep
+
+<!-- Pending: 2-3 MLP sizes (hidden = 50 / 200 / 800), trained in Colab,
+     losses recorded, same measurement protocol. -->
+
+<!-- EDIT PASS REQUIRED (5b): the "fork" finding is the interview sentence —
+     reword it in your own voice. The pre-registration line is yours already
+     (your three calls, all correct). -->
 
 ## 6. What counts as "usable," and what it costs
 
