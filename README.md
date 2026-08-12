@@ -276,8 +276,57 @@ pairing absorbs it.
 
 ### 5c. Model size sweep
 
-<!-- Pending: 2-3 MLP sizes (hidden = 50 / 200 / 800), trained in Colab,
-     losses recorded, same measurement protocol. -->
+Three MLPs, identical architecture and training recipe (200k steps, same LR
+schedule, no regularization tuning — size is the only variable), hidden width
+50 / 200 / 800. All measured at 240 MHz, f32, best-available storage per size.
+
+Pre-registered: hidden-50 ≈ 4,500 chars/sec (measured 5,110), hidden-800
+≈ 400 chars/sec *for a RAM-resident run that turned out to be impossible*;
+total J/char ordering 50 < 200 < 800 (held).
+
+**The RAM wall, located.** Hidden-800's weights (185.7 KB float32) exceed this
+chip's RAM by every route: static allocation fails at link time (DRAM segment
+overflowed by 113 KB) and heap allocation of the two weight matrices fails at
+runtime (malloc returns NULL). Its only life on this chip is flash-resident —
+streaming 186 KB per character through the small flash cache. The measured 94
+chars/sec is therefore "best achievable at this size," which is the
+deployment-relevant number. On this chip, **the model that overfits also
+doesn't fit.**
+
+![Phase 4 size sweep](phase4_size_sweep.png)
+
+| Hidden | Params | Test loss | Storage | chars/sec | Total J/char |
+|---|---|---|---|---|---|
+| — (bigram) | 729 | 2.49 | flash | 26,744 | 10.6 µJ |
+| 50 | 3,597 | 2.2123 | RAM | 5,110 | 56 µJ |
+| 200 | 11,897 | 2.1593 | RAM | 1,517 | 190 µJ |
+| 800 | 46,427 | 2.2306 | flash (RAM impossible) | 94 | 3,021 µJ |
+
+Findings:
+
+- **Hidden-800 is strictly dominated: 16× the energy of hidden-200 for worse
+  test loss.** Two independent failures compound — it overfits (train 2.1304
+  vs test 2.2306; ~180k training examples can't feed 46k params under this
+  recipe) and it pays the flash-thrash tax because it can't fit in RAM.
+  "Bigger is better" fails twice on this rig.
+- **Diminishing returns arrive early:** the first ~3k params buy 0.28 nats
+  over the bigram; the next 8.3k buy 0.05; the next 34k buy negative.
+- **Hidden-50 is the efficiency sweet spot candidate:** 89% of hidden-200's
+  quality gain at 29% of its energy (56 vs 190 µJ/char). Whether it or
+  hidden-200 "wins" depends entirely on where the usable line sits — Phase 6's
+  question, deliberately not answered here.
+- Energy spans 54× across a 13× parameter range — super-linear at the top
+  because crossing the RAM wall adds the thrash tax on top of the MAC count.
+
+Caveats: unseeded training means test losses carry run-to-run variance of
+order ±0.02–0.04 (observed directly: two same-recipe hidden-800 trainings
+differed by 0.036); all numbers are from the single exported instance of each
+size. The hidden-800 row mixes storage config with size by necessity, flagged
+in the chart (square marker).
+
+<!-- EDIT PASS REQUIRED: "the model that overfits also doesn't fit" and the
+     strictly-dominated finding are the interview sentences — reword into your
+     own voice. -->
 
 <!-- EDIT PASS REQUIRED (5b): the "fork" finding is the interview sentence —
      reword it in your own voice. The pre-registration line is yours already
@@ -296,6 +345,9 @@ pairing absorbs it.
 
 - **Out-of-distribution context at word boundaries (MLP port)** — symptom: generated names overwhelmingly began with e/i/h, unlike Colab samples; measurement: witness-text comparison against notebook output; cause: chip loop never reset context after sampling `.`, feeding the model `[prev, prev, 0]` states it never saw in training; fix: context reset to `[0,0,0]` on word boundary. Energy numbers were unaffected (same MACs either way) — only the correctness witness caught it.
 - **`const` weights live in flash; microbenchmark measured RAM** — symptom: MLP matmuls ran 3× slower than Phase 2's identical arithmetic; localization: profiling put 79% of runtime in the matmuls themselves; key clue: the int8 run sped up tanh and softmax, which touch no weights — a shared resource (flash cache) was being thrashed by the 45.6 KB float weights and recovered when weights shrank to 11.9 KB; confirmation: copying float32 weights to RAM restored 91% of the predicted ceiling (410 → 1,518 chars/sec). Phase 2's runtime-filled matrices had silently lived in RAM all along.
+
+- **Loose connection during size sweep** — symptom: bus voltage 4.506 V (vs normal 4.83–4.99 band), power std 4× normal; cause: improperly seated supply connection; fix: reseat, rail recovered to 4.930 V. Forensic detail: the bad run and the rerun differed by exactly 1 character in 50,599 and produced character-identical witness text after the first name — deterministic compute was provably unaffected while the supply flailed; speed numbers and power numbers have independent failure modes.
+- **Hidden-800 exceeds RAM by every route** — static allocation: linker DRAM segment overflowed by 113 KB; heap allocation: malloc of the two weight matrices (96 + 86 KB) returned NULL (SOS blink). RAM ceiling for model weights located empirically between 48 KB (hidden-200, fits with room) and 186 KB (impossible). Fallback: flash-resident measurement, accepted as the "best achievable at this size" datapoint.
 
 <!-- Add every future incident the day it happens. Brownouts go here. -->
 
