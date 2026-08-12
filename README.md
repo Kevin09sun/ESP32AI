@@ -1,29 +1,28 @@
 # How much energy does a language model cost, per character?
 
-Measuring the energy cost of running small language models on a microcontroller — from a bigram lookup table to a trained MLP — to find the cheapest hardware configuration that produces "usable" text generation.
+Measuring the energy cost of running small language models on a microcontroller. I am going all the way from a bigram lookup table to a trained MLP, with more to come in the future (batchnorm, attention, etc.). I hope find the cheapest hardware configuration that produces "usable" text generation. 
 
-<!-- ^ First paragraph must work for a non-engineer reader. Rewrite in your own words. -->
 
 ## The question
 
-Big language models run in datacenters where energy is measured in megawatts. What does inference cost at the *bottom* of the hardware ladder — a $10 microcontroller — and where does capability-per-joule stop being worth it? I measure joules per character across model types, quantization schemes, clock speeds, and model sizes on an ESP32, and define concretely what "usable" means.
+Big language models run in datacenters where energy is measured in megawatts. What does inference cost at the *bottom* of the hardware ladder. That is, a $10 microcontroller, and where does capability-per-joule stop being worth it? I measure joules per character across model types, quantization schemes, clock speeds, and model sizes on an ESP32, and define concretely what "usable" means later on.
 
-<!-- Yours to rewrite. This framing is a placeholder. -->
+I strongly believe that while the developments of large language models today are important, the real value of artificial intelligence lies in embodied AI, enabling robots and other systems by empowering them with intelligence. However, currently, calling a LLM through cloud API can be expensive and slow. The fix to this has to be local deployement of AI within these machines, which requires efficient compute and some sacrifice of capabilities. I hope to uncover what the modern architecture of AI cost on the energy level and understand the sacrifices made in lowering that cost.
 
 ## The rig
 
 - ESP32 dev board (Elegoo kit), powered through an INA219 current sensor on the 5 V supply line
 - The ESP32 reads its own supply current over I2C (documented limitation — see Error analysis)
 - Breadboard power supply module → INA219 shunt → ESP32 VIN; all measurement runs with USB disconnected (single power source)
-- Multimeter used as independent reference instrument
+- Multimeter used as independent reference instrument and checker
 
 <!-- TODO: wiring photo + diagram (Phase 8) -->
 
 ## Method
 
-Power is sampled at 10 Hz for 10 s after a 5 s settle, WiFi/BT explicitly disabled. Energy per character = (mean power under load − idle baseline) ÷ characters generated. All currents corrected by a measured calibration factor (see Instrument validation).
+Power is sampled at 10 Hz for 10 s after a 5 s settle, WiFi/BT explicitly disabled. Energy per character = (mean power under load − idle baseline) / characters generated. All currents corrected by a measured calibration factor (see Instrument validation).
 
-<!-- One sentence justifying each protocol choice: settle time, sample rate, window length, idle definition. Yours. -->
+Here, the idle baseline is just the pure energy cost of running the esp32
 
 ## 1. Baseline: idle power vs CPU frequency
 
@@ -40,17 +39,13 @@ Observations:
 - Naive linear extrapolation to 0 MHz suggests a fixed overhead floor of roughly 178 mW (LDO, power LED, peripherals, leakage) — ~63% of total power at 240 MHz. This is why all inference measurements are reported as deltas above baseline.
 - Repeatability: runs taken on different occasions agree within ~1%.
 
-<!-- The extrapolated floor is a 3-point linear fit, not a measurement — keep that framing. -->
-
 ## Instrument validation
 
-Predicted current through a measured 220.0 Ω resistor at the measured rail voltage: 22.7–22.9 mA. Multimeter in series read 22.2 mA. The INA219 reported 27.70 mA — a +25% over-read.
+Predicted current through a measured 220.0 Ω resistor at the measured rail voltage is roughly 22.7–22.9 mA according to ohm's law. Multimeter in series read 22.2 mA. The INA219 reported 27.70 mA — a +25% over-read.
 
 Diagnosis: shunt confirmed R100 by marking; switching library calibration range (32V/2A → 16V/400mA) had no effect. Root cause undiagnosed (plausibly shunt tolerance or clone INA219 die); correction is empirical.
 
-Fix: measured scale factor k = 22.2 / 27.70 = 0.801 applied to all current readings in software. Verified at a second load point (330 Ω: predicted 15.2 mA, corrected reading 15.0 mA, ~1.5% agreement) — gain correction is linear across 15–22 mA.
-
-<!-- Yours: write this as a paragraph in your own words. The % disagreement number is the checklist requirement. -->
+Fix: measured scale factor k = 22.2 / 27.70 = 0.801 applied to all current readings in software. Verified at a second load point (330 Ω: predicted 15.2 mA, corrected reading 15.0 mA, ~1.5% agreement) — gain correction is linear across 15–22 mA
 
 ## Error analysis
 
@@ -61,8 +56,6 @@ Fix: measured scale factor k = 22.2 / 27.70 = 0.801 applied to all current readi
 - **Window length:** 10 s windows won't capture slow drifts (e.g. regulator warm-up). Spot-check longer runs if results look suspicious.
 - **Self-power:** the INA219 is powered from the ESP32's 3.3 V rail, so its own ~1 mA draw flows through the shunt and is counted in every measurement, including baseline — it cancels in the delta.
 - **Root cause of the 25% gain error remains unknown** — the correction is calibration, not explanation.
-
-<!-- Expand each bullet to a sentence or two in your voice. -->
 
 ## 2. Bigram model (embedding/lookup floor)
 
@@ -86,10 +79,6 @@ Caveats:
 - Generation uses a fixed-seed xorshift PRNG, so every run produces the identical character sequence; run-to-run power differences are rig noise, not workload variation.
 - INA219 reads pause generation ~0.6 ms each at 10 Hz — a ~0.6% duty perturbation.
 - Baseline stability check: 240 MHz idle re-measured on the day of this run gave 280.55 mW vs the original 280.81 mW (0.1% apart).
-
-<!-- EDIT PASS REQUIRED: rewrite at least the two interpretation paragraphs
-     ("The delta above idle..." and "The sharper finding...") in your own words.
-     These are the sentences you'll be asked about. -->
 
 ## 3. Matmul microbenchmark
 
@@ -117,26 +106,24 @@ Caveats:
 - Marginal deltas are 5–7.5 mW against a ±1 mW-scale SE and were measured against a morning baseline on a sagging battery supply (see incident log) — marginal µJ/MMAC values are indicative; total-power values are robust.
 - Checksum pass adds ~1/N overhead (6% at N=16, 1.5% at N=64), included in the measurement.
 
-<!-- EDIT PASS REQUIRED: the two bolded findings are chart-adjacent claims — reword into your own sentences. -->
-
 ## 4. MLP (makemore)
 
 A simple MLP that takes the 3 previous characters as context when generating
 the next. Architecture: 10-dim character embeddings C(27×10), hidden layer
-W1(30×200) + b1 with tanh, output layer W2(200×27) + b2, no batchnorm.
+W1(30×200) + b1 with tanh, output layer W2(200×27) + b2, no batchnorm for now.
 11,897 parameters. Train loss 2.1193 / test loss 2.1593, vs the bigram's 2.49.
 (Test loss of a *retrained* model varies slightly — batch sampling is unseeded —
 but all numbers here come from the single trained instance exported to the chip.)
 
 Sample of names generated **on the chip** (correctness witness, printed after
 each measurement window): `camrockie. jalent. mir. maden. zya. kyrianna.
-tamone. vann. levi. luccany. nastefarri. evang. damari.`
+tamone. vann. levi. luccany. nastefarri. evang. damari.` These are quite name-like names.
 
 ### Quantization decision
 
 Per-tensor symmetric int8, weights-only: weights stored as int8 with one float
 scale per tensor, dequantized to float during the matmul (arithmetic stays
-float32). Full-int8 arithmetic deferred to the Phase 4 sweep.
+float32). Full-int8 arithmetic deferred to future works.
 
 Why per-tensor: weight statistics showed no outliers (max/std between 2 and 5.5
 for every tensor), so a single scale per tensor wastes little range. Confirmed
@@ -220,10 +207,6 @@ data lives) can matter more than the quantity it reports.
 Capability-per-joule datapoint: going bigram → MLP bought 0.33 nats of loss
 (2.49 → 2.16) for ~18× the total energy per char (10.6 → 191 µJ, best configs).
 The awake-cost still dominates marginal compute even at this size.
-
-<!-- EDIT PASS REQUIRED: the "detective sequence" narration and the two bolded
-     findings are the interview-question sentences — reword them into your own
-     voice. The witness names are your real chip output; leave those. -->
 
 ## 5. Sweeps
 
@@ -324,14 +307,6 @@ differed by 0.036); all numbers are from the single exported instance of each
 size. The hidden-800 row mixes storage config with size by necessity, flagged
 in the chart (square marker).
 
-<!-- EDIT PASS REQUIRED: "the model that overfits also doesn't fit" and the
-     strictly-dominated finding are the interview sentences — reword into your
-     own voice. -->
-
-<!-- EDIT PASS REQUIRED (5b): the "fork" finding is the interview sentence —
-     reword it in your own voice. The pre-registration line is yours already
-     (your three calls, all correct). -->
-
 ## 6. What counts as "usable," and what it costs
 
 ### The definition (fixed before the frontier was drawn)
@@ -346,9 +321,7 @@ network in the loop — so continuous-generation chars/sec transfers directly.)
 bigram's samples (`cexze`, `xzindaneriah`) are not names; hidden-50's
 (`isla`, `ariannah`, `mauston`) and hidden-200's (`kyrianna`, `levi`, `quinn`)
 are. Hidden-800 (2.2306) falls just outside, and inspection agrees — its
-output mixes plausible names with memorization artifacts. The line runs
-between two models 0.018 apart in loss; the samples, not the number, justify
-its placement.
+output mixes plausible names with memorization artifacts. The hidden-800 model clearly is overfitting on the training data
 
 This definition is task-relative (name-likeness on this dataset) and
 versioned: better training (batchnorm, careful init, attention) would raise
@@ -373,8 +346,8 @@ work.
 The cheapest configuration that clears the bar is the **hidden-50 MLP,
 float32, RAM-resident, at 240 MHz: 56 µJ per character — about 0.34 mJ per
 generated name** — running on hardware totaling roughly $15–25 (ESP32 dev
-board ~$10, INA219 measurement sensor ~$2–5; the sensor is rig, not product,
-so the deployed answer is "a $10 board"). <!-- CONFIRM actual prices paid -->
+board ~$10 (varies depending on supplier), INA219 measurement sensor ~$2–5; the sensor is rig, not product,
+so the deployed answer is "a $10 board"). 
 For scale: a 9 V battery (~18 kJ) sustains ~18 hours of continuous generation,
 or ~50 million names counting only marginal compute.
 
@@ -387,10 +360,6 @@ by which memory tier it fits.
 Everything above the h=200 quality level is unreachable at usable speed on
 this hardware — that is where a chip with SIMD, more RAM, or both would
 extend the frontier (see Future work).
-
-<!-- EDIT PASS REQUIRED: the definition paragraphs and the verdict are the
-     core claims of the whole project — these more than anything must be in
-     your voice. Confirm the hardware prices from your actual purchases. -->
 
 ## Incident log
 
@@ -405,12 +374,23 @@ extend the frontier (see Future work).
 - **Loose connection during size sweep** — symptom: bus voltage 4.506 V (vs normal 4.83–4.99 band), power std 4× normal; cause: improperly seated supply connection; fix: reseat, rail recovered to 4.930 V. Forensic detail: the bad run and the rerun differed by exactly 1 character in 50,599 and produced character-identical witness text after the first name — deterministic compute was provably unaffected while the supply flailed; speed numbers and power numbers have independent failure modes.
 - **Hidden-800 exceeds RAM by every route** — static allocation: linker DRAM segment overflowed by 113 KB; heap allocation: malloc of the two weight matrices (96 + 86 KB) returned NULL (SOS blink). RAM ceiling for model weights located empirically between 48 KB (hidden-200, fits with room) and 186 KB (impossible). Fallback: flash-resident measurement, accepted as the "best achievable at this size" datapoint.
 
-<!-- Add every future incident the day it happens. Brownouts go here. -->
-
 ## What surprised me
 
-<!-- Write honestly, last. Candidates so far: the instrument was 25% wrong out of the box; idle overhead dwarfs the CPU's own draw; the bigram model costs ~100x less than merely keeping the chip awake; int8 quantization looked 2x faster but the real cause was the flash cache, and float32-in-RAM beat it; simple predictions ("return to the ceiling", "Phase 2 ratio reappears") beat mechanism-heavy hedged ones twice in the storage-config experiments. -->
+In this project, I found many surprises. First, the fact that the INA219 measured 25% off by the multimeter. This was a big surprise. Another surprise is how little running the bigram model actually costs compared to just keeping the chip awake (idel cost). Initially, I thought all the matrix multiplication and lookup would surely cost a lot more than just keeping the chip awake. Turns out not. 
 
 ## Reproducibility
 
-<!-- Phase 8: wiring photo, how-to-run, code map. -->
+![Wiring Photo](wirephoto.jpg)
+
+![Wiring Diagram](wiring_diagram.png)
+
+The code, as well as the notebooks to train the respective models are found in there respective folders. The weights are also attached
+
+To run the benchmarks, simply upload, pull the usb out, power cycle the chip, and re-plug once the measuring is done as indicated by the on-chip LED
+
+## Future Work
+
+Here is a list of potential future stuff to work on that I have considered
+- Batchnorm, attention, etc.
+- Use a ESP32-S3 to run bigger models as well as SIMD support to see int8 vs f32 again
+- Full int8 arithmetics as promised
