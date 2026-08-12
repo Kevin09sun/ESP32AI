@@ -391,6 +391,6 @@ To run the benchmarks, simply upload, pull the usb out, power cycle the chip, an
 ## Future Work
 
 Here is a list of potential future stuff to work on that I have considered
-- Batchnorm, attention, etc.
+- IMplement batchnorm, attention, etc. to see how they would affect performance vs. cost
 - Use a ESP32-S3 to run bigger models as well as SIMD support to see int8 vs f32 again
 - Full int8 arithmetics as promised
