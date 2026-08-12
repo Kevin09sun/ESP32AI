@@ -334,7 +334,63 @@ in the chart (square marker).
 
 ## 6. What counts as "usable," and what it costs
 
-<!-- Phase 6: the definition, the frontier chart, the verdict paragraph. -->
+### The definition (fixed before the frontier was drawn)
+
+**Speed floor: 400 chars/sec.** Derived from a task: a name-suggestion service
+with < 100 ms perceived latency. Average name ≈ 6 characters → 60 chars/sec
+per user; sized for a handful of concurrent users (a classroom pod) → 400.
+(Serving individual requests adds no meaningful overhead on this rig — no
+network in the loop — so continuous-generation chars/sec transfers directly.)
+
+**Quality ceiling: test loss ≤ 2.22.** Drawn by reading the outputs: the
+bigram's samples (`cexze`, `xzindaneriah`) are not names; hidden-50's
+(`isla`, `ariannah`, `mauston`) and hidden-200's (`kyrianna`, `levi`, `quinn`)
+are. Hidden-800 (2.2306) falls just outside, and inspection agrees — its
+output mixes plausible names with memorization artifacts. The line runs
+between two models 0.018 apart in loss; the samples, not the number, justify
+its placement.
+
+This definition is task-relative (name-likeness on this dataset) and
+versioned: better training (batchnorm, careful init, attention) would raise
+the capability ceiling and justify redrawing a stricter line — see Future
+work.
+
+### The frontier
+
+![Phase 6 frontier](phase6_frontier.png)
+
+| Config | Test loss | chars/sec | Total J/char | Usable? |
+|---|---|---|---|---|
+| bigram, flash | 2.49 | 26,744 | 10.6 µJ | ✗ quality |
+| **h=50, f32-RAM** | **2.2123** | **5,110** | **56 µJ** | **✓ cheapest** |
+| h=200, f32-RAM | 2.1593 | 1,517 | 190 µJ | ✓ (best quality) |
+| h=200, f32-flash | 2.1593 | 410 | 697 µJ | ✓ (marginal on speed) |
+| h=200, int8-flash | 2.1655 | 864 | 329 µJ | ✓ |
+| h=800, flash | 2.2306 | 94 | 3,021 µJ | ✗ quality and speed |
+
+### Verdict
+
+The cheapest configuration that clears the bar is the **hidden-50 MLP,
+float32, RAM-resident, at 240 MHz: 56 µJ per character — about 0.34 mJ per
+generated name** — running on hardware totaling roughly $15–25 (ESP32 dev
+board ~$10, INA219 measurement sensor ~$2–5; the sensor is rig, not product,
+so the deployed answer is "a $10 board"). <!-- CONFIRM actual prices paid -->
+For scale: a 9 V battery (~18 kJ) sustains ~18 hours of continuous generation,
+or ~50 million names counting only marginal compute.
+
+Three structural facts shaped the frontier more than any smooth trade-off:
+the awake-power floor (making speed the dominant energy lever), the flash
+cache boundary (~12–45 KB), and the RAM wall (~48–186 KB). On this chip, the
+capability-per-joule question is answered less by the model's arithmetic than
+by which memory tier it fits.
+
+Everything above the h=200 quality level is unreachable at usable speed on
+this hardware — that is where a chip with SIMD, more RAM, or both would
+extend the frontier (see Future work).
+
+<!-- EDIT PASS REQUIRED: the definition paragraphs and the verdict are the
+     core claims of the whole project — these more than anything must be in
+     your voice. Confirm the hardware prices from your actual purchases. -->
 
 ## Incident log
 
