@@ -336,7 +336,8 @@ work.
 |---|---|---|---|---|
 | bigram, flash | 2.49 | 26,744 | 10.6 µJ | ✗ quality |
 | **h=50, f32-RAM** | **2.2123** | **5,110** | **56 µJ** | **✓ cheapest** |
-| h=200, f32-RAM | 2.1593 | 1,517 | 190 µJ | ✓ (best quality) |
+| h=200+BN (folded), f32-RAM | 2.1025 | 1,577 | 180 µJ | ✓ (best quality) |
+| h=200, f32-RAM | 2.1593 | 1,517 | 190 µJ | ✓ |
 | h=200, f32-flash | 2.1593 | 410 | 697 µJ | ✓ (marginal on speed) |
 | h=200, int8-flash | 2.1655 | 864 | 329 µJ | ✓ |
 | h=800, flash | 2.2306 | 94 | 3,021 µJ | ✗ quality and speed |
@@ -391,6 +392,31 @@ To run the benchmarks, simply upload, pull the usb out, power cycle the chip, an
 ## Future Work
 
 Here is a list of potential future stuff to work on that I have considered
-- IMplement batchnorm, attention, etc. to see how they would affect performance vs. cost
+- IMplement batchnorm (done), attention, etc. to see how they would affect performance vs. cost
 - Use a ESP32-S3 to run bigger models as well as SIMD support to see int8 vs f32 again
 - Full int8 arithmetics as promised
+
+### Update 1: batchnorm + proper init
+
+Retrained MLP hidden-200 with batchnorm and proper initialization (makemore video 3, including making output layer not overconfident):
+train 2.0617 / test 2.1025: a 0.057 improvement over the plain MLP at zero added parameters.
+
+Batchnorm was **folded into W1/b1 before export**: at inference, BN with running
+statistics is constant per-neuron arithmetic (scale by gain/std, shift by the
+folded bias), so it compiles away entirely — the exported model has the same
+shapes as the plain MLP and runs on the identical sketch. Folding verified
+exact in Colab (folded test loss matches unfolded to 4 decimals). This is
+standard deployment practice (TensorRT/TFLite do it automatically); LayerNorm,
+used in transformers, cannot be folded — its statistics depend on the live
+activations — which will matter if attention ever lands on this chip.
+
+Measured (240 MHz, f32-RAM): **1,577 chars/sec, 180 µJ/char total** — vs the
+plain MLP's 1,517 and 190. Same shapes and arithmetic, so the 4% speed
+difference is treated as run variation (plausibly data-dependent expf/tanhf
+timing), not a batchnorm speedup. The honest claim: **quality up 0.057 nats,
+inference cost unchanged.**
+
+The usable line stays at 2.22: it was derived from reading outputs, and the
+outputs it admits haven't changed. The verdict is therefore unchanged —
+hidden-50 remains cheapest-usable — while best-available quality moves to
+BN-h=200 at 180 µJ/char.
