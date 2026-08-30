@@ -336,11 +336,14 @@ work.
 |---|---|---|---|---|
 | bigram, flash | 2.49 | 26,744 | 10.6 µJ | ✗ quality |
 | **h=50, f32-RAM** | **2.2123** | **5,110** | **56 µJ** | **✓ cheapest** |
-| h=200+BN (folded), f32-RAM | 2.1025 | 1,577 | 180 µJ | ✓ (best quality) |
+| h=200+BN (folded), f32-RAM | 2.1025 | 1,577 | 180 µJ | ✓ |
 | h=200, f32-RAM | 2.1593 | 1,517 | 190 µJ | ✓ |
 | h=200, f32-flash | 2.1593 | 410 | 697 µJ | ✓ (marginal on speed) |
 | h=200, int8-flash | 2.1655 | 864 | 329 µJ | ✓ |
 | h=800, flash | 2.2306 | 94 | 3,021 µJ | ✗ quality and speed |
+| wavenet e16/h80, f32-RAM | 2.0019 | 438 | 650 µJ | ✓ (best usable quality) |
+| wavenet 76k, flash | 1.9853 | 8 | 35,100 µJ | ✗ speed |
+
 
 ### Verdict
 
@@ -357,10 +360,6 @@ the awake-power floor (making speed the dominant energy lever), the flash
 cache boundary (~12–45 KB), and the RAM wall (~48–186 KB). On this chip, the
 capability-per-joule question is answered less by the model's arithmetic than
 by which memory tier it fits.
-
-Everything above the h=200 quality level is unreachable at usable speed on
-this hardware — that is where a chip with SIMD, more RAM, or both would
-extend the frontier (see Future work).
 
 ## Incident log
 
@@ -420,3 +419,42 @@ The usable line stays at 2.22: it was derived from reading outputs, and the
 outputs it admits haven't changed. The verdict is therefore unchanged —
 hidden-50 remains cheapest-usable — while best-available quality moves to
 BN-h=200 at 180 µJ/char.
+
+### Update 2: wavenet — architecture vs the memory envelope
+
+Trained the makemore wavenet (hierarchical context, block_size 8: three levels
+of pairwise merging instead of one flat concat) in two sizes, all batchnorms
+folded before export (verified exact), measured on the same protocol.
+
+**As-published size (e=24, h=128, 76,579 params ≈ 306 KB):** test loss 1.9853 —
+the best quality of any model in this project. On the chip it is flash-only
+(1.6× past the measured RAM wall) and runs at **8 chars/sec, 35.1 mJ/char** —
+50× below the usable floor. Two observations from this run: mean power was the
+*lowest* of any compute run (277.5 mW vs the usual ~285) — a memory-stall-bound
+core draws less than a computing one, so being slow doesn't even buy
+proportional power savings; and at ~127 ms/char the 10 Hz sampling protocol
+degrades to one sample per character (window stretched to 12.65 s; the J/char
+arithmetic uses actual elapsed time and is unaffected).
+
+**Sized to the memory envelope (e=16, h=80, ~31k params ≈ 125 KB, RAM-resident):**
+train 1.8653 / val 2.0015 / test 2.0019. Measured **438 chars/sec, 650 µJ/char**
+— it clears both usable bars, the quality bar easily and the speed floor by
+9.5%. That margin is thin: any added load, lower clock, or feature would sink
+it below 400.
+
+**This falsifies an earlier conclusion.** Section 6 previously claimed
+everything above h=200 quality was unreachable at usable speed on this
+hardware. It was unreachable by *scaling* — h=800 and the 76k wavenet both die
+on the memory walls — but reachable by *architecture sized to the hardware*:
+the same wavenet family at 2.4× fewer parameters moves from 8 chars/sec to
+438. On this chip, designing to the memory envelope beat naive scale.
+
+Registration record, kept honestly: the 76k speed was registered (20–35
+chars/sec predicted; measured 8 — flash thrash at 2× the previous worst
+working set is catastrophically nonlinear, not proportional). The e16/h80
+speed was not pre-registered before its run — the only measurement in the
+project that skipped the ritual.
+
+Standings after this update: cheapest usable unchanged (h=50, 56 µJ/char);
+best usable quality: wavenet e16/h80 at 2.0019 and 650 µJ/char; best quality
+at any speed: wavenet 76k at 1.9853, unusable.
