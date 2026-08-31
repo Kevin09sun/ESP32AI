@@ -1,4 +1,5 @@
 import os
+import random
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -18,7 +19,7 @@ dropout = 0.2 #how many neurons are turned off per layer, in this case 20%
 
 #get training data
 torch.manual_seed(1337)
-input_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'input.txt')
+input_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'names.txt')
 with open(input_path, 'r', encoding='utf-8') as f:
     text = f.read()
 
@@ -32,11 +33,18 @@ encode = lambda s: [stoi[c] for c in s] #encode, take string turn to integer lis
 decode = lambda l: ''.join([itos[i] for i in l]) #decode oposite of encode
 
 #load data
-data = torch.tensor(encode(text), dtype=torch.long)
-print(f"data length is {len(data)}")
-n = int(0.9 * len(data))
-train_data = data[:n]
-eval_data = data[n:]
+#names.txt is one name per line; treat '\n' as the separator token so the model
+#learns where names start/end. split on whole names (not raw chars) and shuffle
+#first, otherwise the val set would just be the rare tail-of-the-list names.
+names = [name for name in text.splitlines() if name]
+random.seed(1337)
+random.shuffle(names)
+n = int(0.9 * len(names))
+train_text = '\n'.join(names[:n]) + '\n'
+eval_text = '\n'.join(names[n:]) + '\n'
+train_data = torch.tensor(encode(train_text), dtype=torch.long)
+eval_data = torch.tensor(encode(eval_text), dtype=torch.long)
+print(f"data length is {len(train_data) + len(eval_data)} ({len(names)} names)")
 
 def get_batch(split):
     data = train_data if split == 'train' else eval_data
