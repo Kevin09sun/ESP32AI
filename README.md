@@ -458,3 +458,153 @@ project that skipped the ritual.
 Standings after this update: cheapest usable unchanged (h=50, 56 µJ/char);
 best usable quality: wavenet e16/h80 at 2.0019 and 650 µJ/char; best quality
 at any speed: wavenet 76k at 1.9853, unusable.
+
+### Update 3: attention — architecture at matched memory
+
+Trained a small GPT (the makemore/nanoGPT architecture: causal self-attention,
+LayerNorm, residual stream, ReLU feedforward) and ported it with a KV cache.
+
+**Sizing decision.** The model was matched to the *memory envelope*, not to a
+parameter count: n_embd 32, 4 heads, 2 layers, block_size 16 → 27,547 params ≈
+110.2 KB float32, against the wavenet e16/h80's 125 KB. Matching parameters to
+the MLP instead (~11k) would have made a transformer lose to a wavenet 2.8×
+its size and told me nothing about attention. block_size 16 covers the longest
+name in the dataset (15 characters), so the model never needs a sliding window
+and position is absolute within a name.
+
+Train 1.8?? / val 2.0147 / **test 2.0155**.
+
+<!-- Kevin: fill in the train loss from your run's final line. -->
+
+**Result: 1,422 chars/sec, 199.8 µJ/char** (240 MHz, f32-RAM, 14,076 chars over
+a 9.902 s window, 284.03 ± 8.57 mW, bus 4.886 V, 2,005 names, mean 7.02
+chars/name, 0 truncations).
+
+![Phase 6 frontier](phase6_frontier.png)
+
+| Model | Params | KB | Test loss | chars/sec | Total J/char |
+|---|---|---|---|---|---|
+| wavenet e16/h80 | ~31k | 125 | 2.0019 | 438 | 650 µJ |
+| **transformer e32/h4/l2** | **27,547** | **110** | **2.0155** | **1,422** | **200 µJ** |
+
+**The finding: at quality that is not separable, architecture bought 3.25× in
+energy.** The two models differ by 0.0136 nats — well inside the ±0.036
+same-recipe retrain variance measured in the size sweep — so on this dataset
+they are a tie on quality. They are not a tie on cost. Attention did not buy
+capability here; it bought throughput, by needing far less arithmetic and far
+fewer transcendental calls to reach the same place.
+
+Where the speed comes from, mechanically: the wavenet evaluates 80 hidden units
+at 7 positions across three levels, so 560 `tanhf` calls per character. The
+transformer evaluates one new position per character and reuses the rest from
+the KV cache, and its nonlinearity is ReLU — leaving roughly 59 `expf`
+(attention softmaxes plus the output softmax) and 5 `sqrtf` (LayerNorm) per
+character. Phase 3 measured tanh at 17% of runtime; that line item is now
+essentially gone.
+
+**LayerNorm, revisited.** Update 1 noted that BatchNorm folds away at inference
+but LayerNorm cannot, "which will matter if attention ever lands on this chip."
+It landed, and it did not matter much: five live LayerNorms per character, each
+a mean, a variance and one `sqrtf` over 32 elements. The prediction was correct
+in mechanism and wrong in magnitude — the arithmetic it adds is negligible
+next to what ReLU removed.
+
+**Something new: per-character cost is no longer constant.** Attention scores
+are computed against every previous character in the current name, so a
+character at position 12 costs more than one at position 2. Every prior model
+in this project had a fixed per-character cost. The fixed-window protocol
+averages over this silently, which is why the sketch now also logs names
+generated and mean characters per name (7.02 here, against a dataset mean of
+~6 characters plus the end token — an independent check that generation is
+producing whole, correctly terminated names).
+
+**Open observation: the model runs about twice as fast as Phase 2 says it can.**
+Per character this model does roughly 25,700 MACs (3,072 qkv + 1,024 output
+projection + 8,192 feedforward per layer, ×2, plus ~290 attention and 864
+output head, at the measured mean position). At 1,422 chars/sec that is
+**36.6 MMACs/sec** — nearly double Phase 2's float32 ceiling of 18.96, and
+double what the MLP realized in the same memory tier with the same arithmetic.
+Removing tanh cannot explain exceeding a matmul-only ceiling.
+
+One candidate mechanism, untested: the q/k/v projections share a single load of
+the input and accumulate into three independent registers, giving the FPU three
+independent dependency chains to interleave, where Phase 2's kernel and the
+MLP's matmuls each had one. A latency-bound accumulator chain and a
+throughput-bound one are different machines. This is a suspect, not a
+conclusion — isolating it means timing the feedforward loops (single
+accumulator, structurally identical to the MLP's) separately from the fused
+q/k/v loop.
+
+**What this does to the Phase 2 model, either way.** The microbenchmark has now
+failed in both directions: it under-predicted flash-resident energy by 4× in
+Phase 3, and it over-predicts time by ~2× here. Its J/MMAC number is not a
+portable cost model for this chip. MAC count predicts cost only once loop
+structure and memory tier are held fixed — and both of those turned out to be
+larger effects than the quantity the benchmark was built to measure.
+
+**Correctness protocol, upgraded.** Previous ports were validated by reading the
+generated names — which caught the Phase 3 word-boundary bug, but only because
+that bug happened to be visible in text. This port was validated numerically:
+the export script runs a NumPy forward pass built only from the exported
+arrays, bakes the resulting logits for a fixed 4-token sequence into the C
+header, and the sketch compares its own output against them at boot. Measured
+agreement: **8.9e-08 max absolute error**, which is float32 rounding. The
+KV-cached C path is arithmetically identical to the PyTorch model. Both the
+head-fusion and the transposition in the exporter are covered by this check.
+
+**Registration record.** Loss was pre-registered at 1.98–2.05; measured 2.0155,
+inside the range. Speed was pre-registered at ~500 chars/sec; measured 1,422 —
+a 2.8× miss in the same direction as Phase 3's, and for a related reason
+(a cost model that ignores how the arithmetic is arranged).
+
+<!-- Kevin: if you registered your own number before flashing, put it here —
+     the record should show both guesses like the earlier phases do. -->
+
+**Caveats.**
+- One training seed per architecture. The 0.0136 loss gap is a third of the
+  measured retrain variance and cannot be called a win in either direction.
+- The transformer got best-val checkpoint selection and exact full-split
+  evaluation; the wavenet number came from a fixed-step notebook run. The
+  protocol asymmetry favours the transformer and it still did not win on loss.
+- Marginal J/char is not reported: it needs a same-session idle pair, and the
+  bus sat at 4.886 V (mid-band for the supply drift). Total-power energy is
+  robust to that; the marginal number would not be.
+- 27,547 params vs ~31k is a 12% memory advantage to the transformer, not an
+  exact match.
+
+---
+
+### Section 6 replacement table
+
+| Config | Test loss | chars/sec | Total J/char | Usable? |
+|---|---|---|---|---|
+| bigram, flash | 2.49 | 26,744 | 10.6 µJ | ✗ quality |
+| **h=50, f32-RAM** | **2.2123** | **5,110** | **56 µJ** | **✓ cheapest** |
+| h=200+BN (folded), f32-RAM | 2.1025 | 1,577 | 180 µJ | ✓ |
+| h=200, f32-RAM | 2.1593 | 1,517 | 190 µJ | ✓ |
+| **transformer e32/h4/l2, f32-RAM** | **2.0155** | **1,422** | **200 µJ** | **✓ best quality-per-joule** |
+| h=200, int8-flash | 2.1655 | 864 | 329 µJ | ✓ |
+| wavenet e16/h80, f32-RAM | 2.0019 | 438 | 650 µJ | ✓ |
+| h=200, f32-flash | 2.1593 | 410 | 697 µJ | ✓ (marginal on speed) |
+| h=800, flash | 2.2306 | 94 | 3,021 µJ | ✗ quality and speed |
+| wavenet 76k, flash | 1.9853 | 8 | 35,100 µJ | ✗ speed |
+
+Verdict amendment: cheapest usable is unchanged (h=50, 56 µJ/char). Best usable
+quality is now a two-way tie the measurement cannot separate — and the cheaper
+of the two costs a third as much, so the honest statement is that the
+best *quality-per-joule* configuration on this chip is the transformer at
+200 µJ/char, running 3.6× above the usable speed floor rather than 9.5% above
+it.
+
+### Future work — revised
+
+- Isolate the >ceiling matmul rate: time the feedforward loops separately from
+  the fused q/k/v loop. If the feedforward alone runs near 17 MMACs/s, loop
+  structure is the mechanism and Phase 2's ceiling was a property of its
+  kernel's shape, not the chip's.
+- Multiple seeds per architecture, so the wavenet/transformer comparison can be
+  stated as a tie with a confidence interval rather than a caveat.
+- ESP32-S3: with the transcendental tax largely removed, this model is closer to
+  pure matmul than anything else measured here, making it the cleanest possible
+  test of what SIMD buys.
+- Full int8 arithmetic, still owed.
